@@ -41,7 +41,7 @@ char* read_command(){
         strcpy(input, buffer);
     }
     else{
-        printf("ERROR: memory allocation failed ");
+        perror("ERROR: memory allocation failed ");
     }
     return input;
 }
@@ -102,67 +102,158 @@ char* remove_whitespace(char* input){
     while (new_length > 0 && isspace((unsigned char)clean_input[new_length-1])) {
         new_length--;
     }
-
     clean_input[new_length] = '\0';
 
     return clean_input;
 }
 
-char * remove_rd_delimeter(char* input, char* del_in, char* del_out){
-    char* token = strtok(input, del_in);
-    char* clean_tok = strtok(token, del_out);
-    return clean_tok;
-}
-
-void setup_redirect(char** args, int is_input_rd, int is_output_id, int* arg_length_ptr){
-    int skip_flag = 0; 
-    int arg_output_len = 0;
-    char** redirect_execute_commands = NULL;
-    char** redirect_execute_commands_cln = NULL;
-    int fd_in;
-    int fd_out;
-
-    if(is_input_rd >= 0){
-        fd_in = open(args[is_input_rd+1], O_RDONLY);
-         if (fd_in < 0) {
-            perror("ERROR");
-            exit(1);
-        }
-        dup2(fd_in, STDIN_FILENO);
+char** setup_redirect(char** args, int* fd_in, int* fd_out, int* arg_length_ptr){
+   
+    char* concat_str = NULL;
+    char* in_file = NULL;
+    char* out_file = NULL;
+    int concat_str_len = 0;
+    int found_redirection = 0;
+    int i = 0;  int j = 0;
+    
+    char** clean_args = (char**)malloc((*arg_length_ptr + 1) * sizeof(char*)); // +1 for NULL terminator
+    if (clean_args == NULL) {
+        perror("Memory allocation failed");
+        exit(1);
     }
 
-    if(is_output_id >= 0){
-        fd_out = open(args[is_output_id+1], O_WRONLY | O_CREAT);
-        if (fd_out < 0) {
-            perror("ERROR");
-            exit(1);
-        }
-        dup2(fd_out, STDOUT_FILENO);
-    }
+    for (i = 0; i < *arg_length_ptr; i++) {
+        char* arg = args[i];
+        int arg_len = strlen(arg);
 
-    for (int i = 0; i < (*arg_length_ptr); i++) {
-        if (skip_flag) {
-            skip_flag = 0;
-            continue; 
+        for (j = 0; j < arg_len; j++) {
+            if ((arg[j] == '<' || arg[j] == '>') && !found_redirection) {
+                found_redirection = 1;
+            }  
+
+            if (found_redirection) {
+                concat_str_len++;
+                concat_str = (char*)realloc(concat_str, concat_str_len + 1);
+                if (concat_str == NULL) {
+                    perror("Memory allocation failed");
+                    exit(1);
+                }
+                concat_str[concat_str_len - 1] = arg[j];
+                concat_str[concat_str_len] = '\0';
+            }
         }
-        if (strcmp(args[i], "<") == 0 || strcmp(args[i], ">") == 0) {
-            skip_flag = 1; 
-            continue;
-        }
-        redirect_execute_commands[arg_output_len] = args[i];
-        (arg_output_len)++;
     }
     
-    // for(int i = 0; i < arg_output_len; i++){
-    //     redirect_execute_commands[i] = remove_rd_delimeter(redirect_execute_commands[i], "<", ">");
-    // }
+    for (i = 0; args[i] != NULL; i++) {
+        char* arg = args[i];
+        int arg_len = strlen(arg);
 
-    if(execvp(redirect_execute_commands[0], redirect_execute_commands) == -1) {
-        perror("ERROR");
+        for (j = 0; j < arg_len; j++) {
+            if (arg[j] == '<' || arg[j] == '>') {
+                found_redirection = 1;
+                break;
+            }
+        }
+            
+        if (found_redirection) {
+            j--; 
+        }
+
+        clean_args[i] = (char*)malloc((j + 2) * sizeof(char));
+        if (clean_args[i] == NULL) {
+            perror("Memory allocation failed");
+            exit(1);
+        }
+
+        strncpy(clean_args[i], arg, j + 1);
+        clean_args[i][j + 1] = '\0';
+        
+        if (found_redirection) {
+            break;
+        }
+    }
+    
+    clean_args[*arg_length_ptr] = NULL;
+
+    int index = 0;
+    int length = strlen(concat_str);
+
+    while (index < length && concat_str[index] != '<') {
+        index++;
     }
 
-    if(is_input_rd >= 0) close(fd_in);
-    if(is_output_id >= 0) close(fd_out);
+    if (index < length) {
+        index++;
+        int start = index;
+        while (index < length && concat_str[index] != '>') {
+            index++;
+        }
+        if (index > start) {
+            int rd_length = index - start;
+            in_file = (char*)malloc(rd_length + 1);
+            if (in_file == NULL) {
+                perror("Memory allocation failed");
+                exit(1);
+            }
+            strncpy(in_file, &concat_str[start], rd_length);
+            in_file[rd_length] = '\0';
+        }
+    }
+
+    index = 0;
+    while (index < length && concat_str[index] != '>') {
+        index++;
+    }
+
+    if (index < length) {
+        index++; 
+
+        int start = index;
+        while (index < length) {
+            index++;
+        }
+
+        int rd_length = index - start;
+
+        out_file = (char*)malloc(rd_length + 1); 
+        if (out_file == NULL) {
+            perror("Memory allocation failed");
+            exit(1);
+        }
+
+        strncpy(out_file, &concat_str[start], rd_length);
+        out_file[rd_length] = '\0';
+    }
+
+    if(in_file != NULL){
+        *fd_in = open(in_file, O_RDONLY);
+         if (*fd_in == -1) {
+            perror("ERRORll");
+            exit(1);
+        }
+        dup2(*fd_in, STDIN_FILENO);
+        close(*fd_in);
+    }
+    
+    if(out_file != NULL){
+        *fd_out = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (*fd_out == -1) {
+            perror("ERRORpp");
+            exit(1);
+        }
+        dup2(*fd_out, STDOUT_FILENO);
+        close(*fd_out);
+    }
+
+    return clean_args;
+
+}
+
+void sigchld_handler(int signum) {
+    int status;
+    pid_t child_pid;
+
+    while ((child_pid = waitpid(-1, &status, WNOHANG)) > 0);
 
 }
 
@@ -180,11 +271,14 @@ int main(int argc, char *argv[]) {
     char* output_redirect = ">";
     int cmdrd_length;
     int* cmdrd_length_ptr = &cmdrd_length;
-    int is_input_rd = -1;
-    int is_output_rd = -1;
+    int fd_in = -1;
+    int fd_out = -1;
+    int* input_rd_fd = &fd_in;
+    int* output_rd_fd = &fd_out;
     
+    signal(SIGCHLD, sigchld_handler);
     while(TRUE){
-    
+        
         display_prompt(argc, argv);
         fflush(stdout);
 
@@ -193,6 +287,13 @@ int main(int argc, char *argv[]) {
             break;
 	    }
 
+        int run_in_background = 0;
+        if (input[strlen(input) - 1] == '&') {
+            run_in_background = 1;
+            input[strlen(input) - 1] = '\0';
+        }
+        
+        //input = "echo abc > lol.txt";
         commands = parse_command(input, "|", command_length_ptr);
 
         int pipes[command_length - 1][2]; 
@@ -202,6 +303,9 @@ int main(int argc, char *argv[]) {
                 perror("ERROR");
             }
         }
+
+        int is_input_rd = -1;
+        int is_output_rd = -1;
 
         for(int i = 0; i < command_length; i++) {
 
@@ -224,32 +328,47 @@ int main(int argc, char *argv[]) {
 
                 execute_command_child = parse_command(commands[i], " ", arg_length_ptr);
 
-                for(int j = 0; j < arg_length; j++){
-                    if(i == 0 && (!strcmp(execute_command_child[j], input_redirect))){
-                        is_input_rd = j;
-                    }
-                    if(i == command_length - 1 && (!strcmp(execute_command_child[j], output_redirect))){
-                        is_output_rd = j;
-                    }
-                }
+                // for(int j = 0; j < arg_length; j++){
+                //     if(i == 0 && (!strcmp(execute_command_child[j], input_redirect))){
+                //         is_input_rd = j;
+                //     }
+                //     if(i == command_length - 1 && (!strcmp(execute_command_child[j], output_redirect))){
+                //         is_output_rd = j;
+                //     }
+                // }
 
-                if(is_input_rd >= 0 || is_output_rd >= 0){
-                    setup_redirect(execute_command_child, is_input_rd, is_output_rd, arg_length_ptr);
-                }
-                else{
-                    if(execvp(execute_command_child[0], execute_command_child) == -1) {
+                // if(is_input_rd >= 0 || is_output_rd >= 0){
+                //     printf("exec, in_rd %d, out_rd_rd %d\n", is_input_rd, is_output_rd);
+                    execute_rd_child = setup_redirect(execute_command_child, input_rd_fd, output_rd_fd, arg_length_ptr);
+                    if(execvp(execute_rd_child[0], execute_rd_child) == -1) {
                         perror("ERROR");
                     }
-                }
+                //}
+                // else{
+                //     if(execvp(execute_command_child[0], execute_command_child) == -1) {
+                //     perror("ERROR");
+                //     }
+                // }
             }
+            if (!run_in_background) {
 
-            if (i > 0) {
-                close(pipes[i - 1][0]);
+                if (i > 0) {
+                    close(pipes[i - 1][0]);
+                }
+                if (i < (command_length - 1)) {
+                    close(pipes[i][1]);
+                }
+
+                // if(fd_in != -1){
+                //     close(fd_in);
+                // }
+
+                // if(fd_out != -1){
+                //     close(fd_out);
+                // }
+
+                waitpid(child_pids[i], &status, 0);
             }
-            if (i < (command_length - 1)) {
-                close(pipes[i][1]);
-            }
-            waitpid(child_pids[i], &status, 0);
         }
     }
     return 0;
